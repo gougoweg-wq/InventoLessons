@@ -158,58 +158,17 @@ $result = $conn->query($sql);
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Use the single modal implementation below — removed duplicate dynamic-modal code -->
 <script>
-// View message modal
-document.querySelectorAll('.viewMessageBtn').forEach(btn => {
-  btn.addEventListener('click', function() {
-    const message = this.dataset.message;
-    const student = this.dataset.student;
-    const teacher = this.dataset.teacher;
-    
-    const modalHtml = `
-      <div class="modal fade" tabindex="-1">
-        <div class="modal-dialog modal-lg">
-          <div class="modal-content">
-            <div class="modal-header">
-              <h5 class="modal-title">
-                <i class="fas fa-envelope me-2"></i>Email Message
-              </h5>
-              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-              <div class="row mb-3">
-                <div class="col-sm-3"><strong>From:</strong></div>
-                <div class="col-sm-9">${teacher}</div>
-              </div>
-              <div class="row mb-3">
-                <div class="col-sm-3"><strong>To:</strong></div>
-                <div class="col-sm-9">${student}</div>
-              </div>
-              <div class="row mb-3">
-                <div class="col-sm-3"><strong>Message:</strong></div>
-                <div class="col-sm-9">
-                  <div style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 15px; border-radius: 8px; background: #f8f9fa;">
-                    ${message}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-    
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-    const modalElement = document.body.lastElementChild;
-    const modalInstance = new bootstrap.Modal(modalElement);
-    modalInstance.show();
-    
-    modalElement.addEventListener('hidden.bs.modal', () => {
-      modalElement.remove();
-    });
+document.querySelectorAll('.viewMessageBtn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.getElementById('modalTeacher').innerText = btn.dataset.teacher;
+    document.getElementById('modalStudent').innerText = btn.dataset.student;
+    // we intentionally allow basic HTML in messages that were saved from teachers;
+    // if you prefer text-only rendering use textContent instead:
+    document.getElementById('modalMessageContent').innerHTML = btn.dataset.message;
+    new bootstrap.Modal(document.getElementById('messageModal')).show();
   });
 });
 </script>
@@ -233,14 +192,3 @@ document.querySelectorAll('.viewMessageBtn').forEach(btn => {
     </div>
   </div>
 </div>
-
-<script>
-document.querySelectorAll('.viewMessageBtn').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    document.getElementById('modalTeacher').innerText = btn.dataset.teacher;
-    document.getElementById('modalStudent').innerText = btn.dataset.student;
-    document.getElementById('modalMessageContent').innerHTML = btn.dataset.message;
-    new bootstrap.Modal(document.getElementById('messageModal')).show();
-  });
-});
-</script>
