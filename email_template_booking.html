@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: linear-gradient(135deg, #0099A4, #7C243C);
+  margin: 0; padding: 0;
+  color: #333;
+}
+.container {
+  max-width: 600px;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 40px auto;
+  box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+}
+.header {
+  text-align: center;
+  padding: 20px;
+  background: #0099A4;
+}
+.header img {
+  width: 150px;
+}
+.content {
+  padding: 30px;
+  font-size: 15px;
+  line-height: 1.6;
+}
+.content h2 {
+  color: #7C243C;
+}
+.footer {
+  background: #f8f8f8;
+  padding: 20px;
+  text-align: center;
+  border-top: 1px solid #eee;
+}
+.footer img {
+  width: 100%;
+  max-width: 480px;
+}
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="cid:logoImage" alt="Invento Logo">
+    </div>
+    <div class="content">
+      <h2>📅 Lesson Booking Confirmation</h2>
+      <p><strong>Dear {{recipientName}},</strong></p>
+      <p>{{messageBody}}</p>
+      <p style="margin-top: 20px;">Best regards,<br><strong>Correctional Lessons System</strong><br>Invento — The Uzbek International School</p>
+    </div>
+    <div class="footer">
+      <img src="cid:signatureImage" alt="Invento Signature">
+    </div>
+  </div>
+</body>
+</html>
