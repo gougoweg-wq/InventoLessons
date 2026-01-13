@@ -4,25 +4,19 @@ ini_set('display_errors', 1);
 session_start();
 require_once 'db_connect.php';
 
-/* -------------------------------
-   🔒 Access Gate (same as dashboard)
---------------------------------*/
+/* Admin guard */
 if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_email'] ?? '') !== 'admin@invento.uz') {
     header("Location: index.php");
     exit();
 }
 
-/* -------------------------------
-   🔐 Basic CSRF token
---------------------------------*/
+/* CSRF token */
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 $CSRF = $_SESSION['csrf_token'];
 
-/* -------------------------------
-   📥 Get Student ID
---------------------------------*/
+/* Get student id */
 $student_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 if ($student_id <= 0) {
     http_response_code(400);
@@ -30,9 +24,7 @@ if ($student_id <= 0) {
     exit();
 }
 
-/* -------------------------------
-   🧾 Fetch Student + Parent
---------------------------------*/
+/* Fetch helpers */
 function fetch_student(mysqli $conn, int $id): ?array {
     $stmt = $conn->prepare("SELECT id, name, email, grade, created_at, profile_pic FROM users WHERE id = ? LIMIT 1");
     $stmt->bind_param("i", $id);
@@ -61,68 +53,64 @@ if (!$student) {
 }
 $parent = fetch_parent($conn, $student_id);
 
-/* -------------------------------
-   📂 Ensure uploads directory
---------------------------------*/
+/* Ensure upload dir */
 $uploadDir = __DIR__ . "/uploads/students";
 if (!is_dir($uploadDir)) {
     @mkdir($uploadDir, 0775, true);
 }
 
-/* -------------------------------
-   🗑 Delete student (B)
---------------------------------*/
 $flash = null;
-if (($_SERVER['REQUEST_METHOD'] === 'POST') && isset($_POST['action']) && $_POST['action'] === 'delete') {
+
+/* Delete student */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete') {
     if (!hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'] ?? '')) {
         $flash = ['type'=>'danger','msg'=>'Invalid CSRF token. Reload the page and try again.'];
     } else {
-        // Delete related rows first (if any)
-        $sid = $student_id;
+        // use transaction to ensure integrity
+        $conn->begin_transaction();
+        try {
+            $sid = $student_id;
 
-        // bookings
-        $stmt = $conn->prepare("DELETE FROM bookings WHERE user_id = ?");
-        $stmt->bind_param("i", $sid);
-        $stmt->execute();
-        $stmt->close();
+            $stmt = $conn->prepare("DELETE FROM bookings WHERE user_id = ?");
+            $stmt->bind_param("i", $sid);
+            $stmt->execute();
+            $stmt->close();
 
-        // teacher_email_logs
-        $stmt = $conn->prepare("DELETE FROM teacher_email_logs WHERE student_id = ?");
-        $stmt->bind_param("i", $sid);
-        $stmt->execute();
-        $stmt->close();
+            $stmt = $conn->prepare("DELETE FROM teacher_email_logs WHERE student_id = ?");
+            $stmt->bind_param("i", $sid);
+            $stmt->execute();
+            $stmt->close();
 
-        // parents
-        $stmt = $conn->prepare("DELETE FROM parents WHERE student_id = ?");
-        $stmt->bind_param("i", $sid);
-        $stmt->execute();
-        $stmt->close();
+            $stmt = $conn->prepare("DELETE FROM parents WHERE student_id = ?");
+            $stmt->bind_param("i", $sid);
+            $stmt->execute();
+            $stmt->close();
 
-        // users (the student)
-        $stmt = $conn->prepare("DELETE FROM users WHERE id = ? LIMIT 1");
-        $stmt->bind_param("i", $sid);
-        $okUser = $stmt->execute();
-        $stmt->close();
+            $stmt = $conn->prepare("DELETE FROM users WHERE id = ? LIMIT 1");
+            $stmt->bind_param("i", $sid);
+            $okUser = $stmt->execute();
+            $stmt->close();
 
-        if ($okUser) {
-            // log admin action
-            $lg = $conn->prepare("INSERT INTO logs (admin_email, user_id, role, action) VALUES (?, ?, 'admin', 'Deleted student profile')");
-            $lg->bind_param("si", $_SESSION['admin_email'], $sid);
-            $lg->execute();
-            $lg->close();
-
-            header("Location: admin_dashboard.php?deleted=1");
-            exit();
-        } else {
+            if ($okUser) {
+                $lg = $conn->prepare("INSERT INTO logs (admin_email, user_id, role, action) VALUES (?, ?, 'admin', 'Deleted student profile')");
+                $lg->bind_param("si", $_SESSION['admin_email'], $sid);
+                $lg->execute();
+                $lg->close();
+                $conn->commit();
+                header("Location: admin_dashboard.php?deleted=1");
+                exit();
+            }
+            $conn->rollback();
+            $flash = ['type'=>'danger','msg'=>'Error while deleting student.'];
+        } catch (Exception $ex) {
+            $conn->rollback();
             $flash = ['type'=>'danger','msg'=>'Error while deleting student.'];
         }
     }
 }
 
-/* -------------------------------
-   💾 Save / Update student
---------------------------------*/
-if (($_SERVER['REQUEST_METHOD'] === 'POST') && isset($_POST['action']) && $_POST['action'] === 'save') {
+/* Save/update student */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save') {
     if (!hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'] ?? '')) {
         $flash = ['type'=>'danger','msg'=>'Invalid CSRF token. Reload the page and try again.'];
     } else {
@@ -133,97 +121,119 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST') && isset($_POST['action']) && $_POST
         $new_password = trim($_POST['new_password'] ?? '');
         $profile_photo_path = $student['profile_pic'] ?? null;
 
-        // Validate basic
         if ($name === '' || $email === '' || $grade === '') {
             $flash = ['type'=>'danger','msg'=>'Name, Email, and Grade are required.'];
         } else {
-            // Handle profile photo upload (A)
-            if (!empty($_FILES['profile_pic']['name'])) {
-                $f = $_FILES['profile_pic'];
-                if ($f['error'] === UPLOAD_ERR_OK) {
-                    $ext = strtolower(pathinfo($f['name'], PATHINFO_EXTENSION));
-                    $allowed = ['jpg','jpeg','png','webp','gif'];
-                    if (in_array($ext, $allowed, true)) {
+            // Start transaction
+            $conn->begin_transaction();
+            try {
+                // Handle profile photo upload (safe checks)
+                if (!empty($_FILES['profile_pic']['name'])) {
+                    $f = $_FILES['profile_pic'];
+                    if ($f['error'] === UPLOAD_ERR_OK) {
+                        // limit size to 2MB
+                        if ($f['size'] > 2 * 1024 * 1024) {
+                            throw new RuntimeException('Image too large (max 2MB).');
+                        }
+                        // mime-type check
+                        $finfo = new finfo(FILEINFO_MIME_TYPE);
+                        $mime = $finfo->file($f['tmp_name']);
+                        $ext = '';
+                        $allowed = [
+                            'image/jpeg' => 'jpg',
+                            'image/png'  => 'png',
+                            'image/webp' => 'webp',
+                            'image/gif'  => 'gif'
+                        ];
+                        if (!isset($allowed[$mime])) {
+                            throw new RuntimeException('Invalid image type. Allowed: jpg, png, webp, gif.');
+                        }
+                        $ext = $allowed[$mime];
                         $newName = 'student_'.$student_id.'_'.time().'.'.$ext;
                         $dest = $uploadDir . '/' . $newName;
-                        if (move_uploaded_file($f['tmp_name'], $dest)) {
-                            $profile_photo_path = 'uploads/students/'.$newName;
+                        if (!move_uploaded_file($f['tmp_name'], $dest)) {
+                            throw new RuntimeException('Photo upload failed; keeping previous photo.');
+                        }
+                        // remove previous photo if inside uploads/students
+                        if (!empty($profile_photo_path)) {
+                            $prev = realpath(__DIR__ . '/' . $profile_photo_path);
+                            $uploadsDirReal = realpath($uploadDir);
+                            if ($prev && $uploadsDirReal && strpos($prev, $uploadsDirReal) === 0 && is_file($prev)) {
+                                @unlink($prev);
+                            }
+                        }
+                        $profile_photo_path = 'uploads/students/'.$newName;
+                    } else {
+                        // upload error
+                        // keep previous photo but set a warning
+                        $flash = ['type'=>'warning','msg'=>'Photo upload error; keeping previous photo.'];
+                    }
+                }
+
+                // Update users
+                $stmt = $conn->prepare("UPDATE users SET name = ?, email = ?, grade = ?, profile_pic = ? WHERE id = ?");
+                $stmt->bind_param("ssssi", $name, $email, $grade, $profile_photo_path, $student_id);
+                $okUser = $stmt->execute();
+                $stmt->close();
+
+                // Optional password change
+                if ($okUser && $new_password !== '') {
+                    $hash = password_hash($new_password, PASSWORD_BCRYPT);
+                    $stmt = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
+                    $stmt->bind_param("si", $hash, $student_id);
+                    $stmt->execute();
+                    $stmt->close();
+                }
+
+                // Upsert parent email
+                if ($okUser) {
+                    if ($parent_email !== '') {
+                        if ($parent) {
+                            $stmt = $conn->prepare("UPDATE parents SET parent_email = ? WHERE id = ?");
+                            $stmt->bind_param("si", $parent_email, $parent['id']);
+                            $stmt->execute();
+                            $stmt->close();
                         } else {
-                            $flash = ['type'=>'warning','msg'=>'Photo upload failed; keeping previous photo.'];
+                            $stmt = $conn->prepare("INSERT INTO parents (parent_email, student_id) VALUES (?, ?)");
+                            $stmt->bind_param("si", $parent_email, $student_id);
+                            $stmt->execute();
+                            $stmt->close();
                         }
                     } else {
-                        $flash = ['type'=>'warning','msg'=>'Invalid image type. Allowed: jpg, jpeg, png, webp, gif.'];
+                        if ($parent) {
+                            $stmt = $conn->prepare("DELETE FROM parents WHERE id = ? LIMIT 1");
+                            $stmt->bind_param("i", $parent['id']);
+                            $stmt->execute();
+                            $stmt->close();
+                        }
                     }
+
+                    // Log update
+                    $lg = $conn->prepare("INSERT INTO logs (admin_email, user_id, role, action) VALUES (?, ?, 'admin', 'Updated student profile')");
+                    $lg->bind_param("si", $_SESSION['admin_email'], $student_id);
+                    $lg->execute();
+                    $lg->close();
+
+                    $conn->commit();
+                    header("Location: admin_edit_student_profile.php?id=".$student_id."&saved=1");
+                    exit();
                 } else {
-                    $flash = ['type'=>'warning','msg'=>'Photo upload error; keeping previous photo.'];
+                    $conn->rollback();
+                    $flash = ['type'=>'danger','msg'=>'Database error while updating student.'];
                 }
-            }
-
-            // Update users
-            $stmt = $conn->prepare("UPDATE users SET name = ?, email = ?, grade = ?, profile_pic = ? WHERE id = ?");
-            $stmt->bind_param("ssssi", $name, $email, $grade, $profile_photo_path, $student_id);
-            $okUser = $stmt->execute();
-            $stmt->close();
-
-            // Optional password change (C)
-            if ($okUser && $new_password !== '') {
-                $hash = password_hash($new_password, PASSWORD_BCRYPT);
-                $stmt = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
-                $stmt->bind_param("si", $hash, $student_id);
-                $stmt->execute();
-                $stmt->close();
-            }
-
-            // Upsert parent email (one row per student)
-            if ($okUser) {
-                if ($parent_email !== '') {
-                    if ($parent) {
-                        $stmt = $conn->prepare("UPDATE parents SET parent_email = ? WHERE id = ?");
-                        $stmt->bind_param("si", $parent_email, $parent['id']);
-                        $stmt->execute();
-                        $stmt->close();
-                    } else {
-                        $stmt = $conn->prepare("INSERT INTO parents (parent_email, student_id) VALUES (?, ?)");
-                        $stmt->bind_param("si", $parent_email, $student_id);
-                        $stmt->execute();
-                        $stmt->close();
-                    }
-                } else {
-                    // If parent email cleared -> remove mapping
-                    if ($parent) {
-                        $stmt = $conn->prepare("DELETE FROM parents WHERE id = ? LIMIT 1");
-                        $stmt->bind_param("i", $parent['id']);
-                        $stmt->execute();
-                        $stmt->close();
-                    }
-                }
-
-                // Log update
-                $lg = $conn->prepare("INSERT INTO logs (admin_email, user_id, role, action) VALUES (?, ?, 'admin', 'Updated student profile')");
-                $lg->bind_param("si", $_SESSION['admin_email'], $student_id);
-                $lg->execute();
-                $lg->close();
-
-                // Success → reload with fresh data (prevents form resubmit)
-                header("Location: admin_edit_student_profile.php?id=".$student_id."&saved=1");
-                exit();
-            } else {
-                $flash = ['type'=>'danger','msg'=>'Database error while updating student.'];
+            } catch (Exception $ex) {
+                $conn->rollback();
+                if (!$flash) $flash = ['type'=>'danger','msg'=>$ex->getMessage()];
             }
         }
     }
 }
 
-// if redirected after save
-if (isset($_GET['saved'])) {
-    $flash = ['type'=>'success','msg'=>'Student profile updated successfully.'];
-}
-
-/* Refresh data after any operation */
+/* After operations refresh */
 $student = fetch_student($conn, $student_id);
 $parent  = fetch_parent($conn, $student_id);
 
-// grades 6..12
+/* grades */
 $grades = range(6, 12);
 ?>
 <!DOCTYPE html>
@@ -241,9 +251,9 @@ $grades = range(6, 12);
   object-fit: cover; border: 2px solid #e9ecef;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
-.label-sm { 
-  font-size: .875rem; 
-  color: var(--text-secondary); 
+.label-sm {
+  font-size: .875rem;
+  color: var(--text-secondary);
   font-weight: 500;
 }
 </style>
@@ -305,8 +315,8 @@ $grades = range(6, 12);
           </div>
 
           <div class="col-12">
-            <label class="form-label" for="profile_pic">Profile Photo (jpg, png, webp, gif)</label>
-            <input type="file" id="profile_pic" name="profile_pic" class="form-control">
+            <label class="form-label" for="profile_pic">Profile Photo (jpg, png, webp, gif) — max 2MB</label>
+            <input type="file" id="profile_pic" name="profile_pic" class="form-control" accept=".jpg,.jpeg,.png,.webp,.gif,image/*">
           </div>
 
           <div class="col-12">
