@@ -13,14 +13,14 @@ $sql = "SELECT l.*, t.name AS teacher_name
         LEFT JOIN teachers t ON l.teacher_id = t.id 
         WHERE 1";
 
-// 🔍 Apply filters
+// Apply filters safely
 if (!empty($_GET['teacher'])) $sql .= " AND t.name LIKE '%" . $conn->real_escape_string($_GET['teacher']) . "%'";
 if (!empty($_GET['student'])) $sql .= " AND l.student_name LIKE '%" . $conn->real_escape_string($_GET['student']) . "%'";
 if (!empty($_GET['email'])) $sql .= " AND l.parent_email LIKE '%" . $conn->real_escape_string($_GET['email']) . "%'";
 if (!empty($_GET['grade'])) $sql .= " AND l.student_grade = '" . $conn->real_escape_string($_GET['grade']) . "'";
 if (!empty($_GET['language'])) $sql .= " AND l.language = '" . $conn->real_escape_string($_GET['language']) . "'";
 if (!empty($_GET['start_date']) && !empty($_GET['end_date'])) {
-    $sql .= " AND DATE(l.sent_at) BETWEEN '" . $_GET['start_date'] . "' AND '" . $_GET['end_date'] . "'";
+    $sql .= " AND DATE(l.sent_at) BETWEEN '" . $conn->real_escape_string($_GET['start_date']) . "' AND '" . $conn->real_escape_string($_GET['end_date']) . "'";
 }
 
 $sql .= " ORDER BY l.sent_at DESC";
@@ -52,7 +52,7 @@ $result = $conn->query($sql);
         <i class="fas fa-envelope me-2"></i>Email Logs
       </h3>
 
-      <!-- 🔎 Search & Filter Form -->
+      <!-- Search & Filter Form -->
       <form method="GET" class="row g-2 mb-4">
         <div class="col-md-2">
           <input type="text" name="teacher" class="form-control" placeholder="Teacher" value="<?= htmlspecialchars($_GET['teacher'] ?? '') ?>">
@@ -90,7 +90,7 @@ $result = $conn->query($sql);
         </div>
       </form>
 
-      <!-- 📊 Results Table -->
+      <!-- Results Table -->
       <div class="table-responsive">
         <table class="table">
           <thead>
@@ -107,7 +107,7 @@ $result = $conn->query($sql);
             </tr>
           </thead>
           <tbody>
-            <?php if ($result->num_rows > 0): ?>
+            <?php if ($result && $result->num_rows > 0): ?>
               <?php while ($row = $result->fetch_assoc()): ?>
                 <tr>
                   <td><?= date('M j, Y H:i', strtotime($row['sent_at'])) ?></td>
@@ -115,9 +115,9 @@ $result = $conn->query($sql);
                   <td><?= htmlspecialchars($row['student_name']) ?></td>
                   <td><span class="badge badge-info"><?= htmlspecialchars($row['student_grade']) ?></span></td>
                   <td><?= htmlspecialchars($row['parent_email']) ?></td>
-                  <td><span class="badge badge-success"><?= strtoupper($row['language'] ?? 'EN') ?></span></td>
+                  <td><span class="badge badge-success"><?= htmlspecialchars(strtoupper($row['language'] ?? 'EN')) ?></span></td>
                   <td>
-                    <?php if ($row['attachment_path']): ?>
+                    <?php if (!empty($row['attachment_path'])): ?>
                       <a href="<?= htmlspecialchars($row['attachment_path']) ?>" target="_blank" class="btn btn-sm btn-outline-primary">
                         <i class="fas fa-paperclip"></i> File
                       </a>
@@ -134,7 +134,7 @@ $result = $conn->query($sql);
                     </button>
                   </td>
                   <td>
-                    <a href="email_delete.php?id=<?= $row['id'] ?>" 
+                    <a href="email_delete.php?id=<?= (int)$row['id'] ?>" 
                        class="btn btn-sm btn-danger" 
                        onclick="return confirm('Delete this email log?')">
                       <i class="fas fa-trash"></i>
@@ -157,31 +157,13 @@ $result = $conn->query($sql);
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-
-<!-- Use the single modal implementation below — removed duplicate dynamic-modal code -->
-<script>
-document.querySelectorAll('.viewMessageBtn').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    document.getElementById('modalTeacher').innerText = btn.dataset.teacher;
-    document.getElementById('modalStudent').innerText = btn.dataset.student;
-    // we intentionally allow basic HTML in messages that were saved from teachers;
-    // if you prefer text-only rendering use textContent instead:
-    document.getElementById('modalMessageContent').innerHTML = btn.dataset.message;
-    new bootstrap.Modal(document.getElementById('messageModal')).show();
-  });
-});
-</script>
-</body>
-</html>
-
-<!-- 📩 Message Preview Modal -->
+<!-- Single safe modal for viewing messages -->
 <div class="modal fade" id="messageModal" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header bg-primary text-white">
         <h5 class="modal-title">📨 Sent Message</h5>
-        <button class="btn-close" data-bs-dismiss="modal"></button>
+        <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
         <p><strong>Teacher:</strong> <span id="modalTeacher"></span></p>
@@ -189,6 +171,25 @@ document.querySelectorAll('.viewMessageBtn').forEach(btn=>{
         <hr>
         <div id="modalMessageContent" style="white-space:pre-wrap;"></div>
       </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
     </div>
   </div>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// Use textContent to avoid inserting HTML from the database.
+// If you intentionally want to render HTML, switch to innerHTML after sanitizing server-side.
+document.querySelectorAll('.viewMessageBtn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.getElementById('modalTeacher').textContent = btn.dataset.teacher;
+    document.getElementById('modalStudent').textContent = btn.dataset.student;
+    document.getElementById('modalMessageContent').textContent = btn.dataset.message;
+    new bootstrap.Modal(document.getElementById('messageModal')).show();
+  });
+});
+</script>
+</body>
+</html>
