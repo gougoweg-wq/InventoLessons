@@ -9,8 +9,21 @@ if (empty($_SESSION['admin_logged_in']) || $_SESSION['admin_email'] !== 'admin@i
     exit("<div class='alert alert-danger m-3'>Access denied.</div>");
 }
 
+// ---------------------------
+// CSRF token (for delete)
+// ---------------------------
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$CSRF = $_SESSION['csrf_token'];
+
 // ✅ Delete booking (Soft delete if status exists, otherwise remove)
 if (isset($_POST['delete_booking'])) {
+    // CSRF validation
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        die("<script>alert('Invalid CSRF token. Please reload and try again.');history.back();</script>");
+    }
+
     $bookingId = intval($_POST['delete_booking']);
     $hasStatus = $conn->query("SHOW COLUMNS FROM bookings LIKE 'status'")->num_rows > 0;
 
@@ -343,8 +356,12 @@ h3 {
             </tr>
         </thead>
         <tbody>
+        <?php
+            // compute correct colspan for the "no bookings" row
+            $colCount = 7 + ($hasTeacherId ? 1 : 0);
+        ?>
         <?php if ($bookings->num_rows == 0): ?>
-            <tr><td colspan="8" class="text-center">No bookings found.</td></tr>
+            <tr><td colspan="<?= $colCount ?>" class="text-center">No bookings found.</td></tr>
         <?php else: ?>
             <?php while($b = $bookings->fetch_assoc()): ?>
             <tr>
@@ -358,6 +375,7 @@ h3 {
                 <td><?= htmlspecialchars($b['booking_date']) ?></td>
                 <td>
                     <?php
+                    // map statuses to bootstrap color classes
                     $badge = match($b['status']) {
                         'visited' => 'success',
                         'not attended' => 'danger',
@@ -370,6 +388,7 @@ h3 {
                 <td>
                     <a href="admin_edit_booking.php?id=<?= $b['id'] ?>" class="btn btn-sm btn-outline-primary">Edit</a>
                     <form method="POST" style="display:inline;">
+                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($CSRF) ?>">
                         <button name="delete_booking" value="<?= $b['id'] ?>" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this booking?')">Delete</button>
                     </form>
                 </td>
