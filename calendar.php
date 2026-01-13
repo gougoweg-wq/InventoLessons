@@ -2,12 +2,12 @@
 session_start();
 include('db_connect.php');
 
-// Check grade
-$grade = $_SESSION["grade"] ?? null;
-if (!$grade) {
+// Check grade in session
+$gradeRaw = $_SESSION["grade"] ?? null;
+if (!$gradeRaw) {
     die("No grade in session. Please log in again.");
 }
-preg_match('/\d+/', $grade, $matches);
+preg_match('/\d+/', $gradeRaw, $matches);
 $grade_number = $matches[0] ?? null;
 if (!$grade_number) {
     die("Invalid grade format.");
@@ -22,46 +22,72 @@ $subjectsByGrade = [
     "10" => ["Uzbek A", "Uzbek B", "Russian A", "Russian B", "I&S", "Math", "Physics", "Chemistry", "Biology", "English A", "English B"],
     "11" => ["Uzbek A", "Uzbek B", "Russian A", "Russian B", "Business Management", "Math", "Physics", "Chemistry", "Biology", "English A", "English B"],
 ];
-
 $allowedSubjects = $subjectsByGrade[$grade_number] ?? [];
 
-// Load iCal feed and parse
+// Default iCal URL (replace if you have a different feed)
 $icalUrl = "https://calendar.google.com/calendar/ical/c_fa8beeecc764d2836e99bf057540e15f037c8a762be33c3a0a660a1f45862f90%40group.calendar.google.com/private-c61ee269e22d68e2978fcaba1b6868e5/basic.ics";
-$icalData = file_get_contents($icalUrl);
 
-function parseIcsEvents($icalData) {
+// Fetch with a short timeout and error handling
+$icalData = false;
+try {
+    $ctx = stream_context_create([
+        'http' => [
+            'timeout' => 5,
+            'ignore_errors' => true,
+            'header' => "User-Agent: InventoBooking/1.0\r\n"
+        ]
+    ]);
+    $icalData = @file_get_contents($icalUrl, false, $ctx);
+} catch (Throwable $e) {
+    $icalData = false;
+}
+if ($icalData === false || trim($icalData) === '') {
+    // On failure, use empty events and let UI show "no slots"
+    $events = [];
+} else {
+    $events = parseIcsEvents($icalData);
+}
+
+function parseIcsEvents(string $icalData): array {
+    // Robust ICS parser for simple VEVENT extraction
     preg_match_all('/BEGIN:VEVENT(.*?)END:VEVENT/s', $icalData, $matches);
     $events = [];
 
     foreach ($matches[1] as $eventData) {
-        preg_match('/SUMMARY:(.*)/', $eventData, $summary);
-        preg_match('/DTSTART(?:;TZID=.*)?:([\dTZ]+)/', $eventData, $start);
+        // SUMMARY may be folded across lines per RFC5545; join folded lines first
+        $eventData = preg_replace("/\r\n[ \t]/", "", $eventData);
+        if (preg_match('/SUMMARY:(.*?)(?:\r\n|$)/i', $eventData, $s)) {
+            $summary = trim($s[1]);
+        } else {
+            $summary = '';
+        }
 
-        if (!empty($start[1])) {
-            $dateStr = $start[1];
+        // DTSTART: handle date-time with Z or without, or date-only
+        if (preg_match('/DTSTART(?:;TZID=[^:]+)?:([0-9TZ]+)/', $eventData, $d)) {
+            $dateStr = $d[1];
+            $date = null;
+            // Try full datetime with Z
             if (str_ends_with($dateStr, 'Z')) {
                 $date = DateTime::createFromFormat('Ymd\THis\Z', $dateStr, new DateTimeZone('UTC'));
-                $date->setTimezone(new DateTimeZone('Asia/Tashkent'));
-            } else {
+                if ($date) $date->setTimezone(new DateTimeZone('Asia/Tashkent'));
+            } elseif (preg_match('/^\d{8}T\d{6}$/', $dateStr)) {
                 $date = DateTime::createFromFormat('Ymd\THis', $dateStr);
+            } elseif (preg_match('/^\d{8}$/', $dateStr)) {
+                // All-day event (date-only)
+                $date = DateTime::createFromFormat('Ymd', $dateStr);
+                $date->setTime(9, 0); // default time
             }
-
-            // Normalize summary
-            $summaryText = strtolower(trim($summary[1] ?? ''));
-            $summaryText = preg_replace('/[^a-z0-9 ]/', '', $summaryText);
-
-            $events[] = [
-                'summary' => $summaryText,
-                'start'   => $date ? $date->format('Y-m-d H:i') : ''
-            ];
+            $start = $date ? $date->format('Y-m-d H:i') : '';
+            // Normalize summary text for easier searching
+            $summaryText = mb_strtolower(trim($summary), 'UTF-8');
+            $summaryText = preg_replace('/[^a-z0-9 ]/', ' ', $summaryText);
+            $summaryText = preg_replace('/\s+/', ' ', $summaryText);
+            $events[] = ['summary' => $summaryText, 'start' => $start];
         }
     }
     return $events;
 }
-
-$events = parseIcsEvents($icalData);
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -104,12 +130,11 @@ $events = parseIcsEvents($icalData);
 </div>
 
 <script>
-// Events from PHP
-const events = <?php echo json_encode($events); ?>;
+const events = <?php echo json_encode($events, JSON_UNESCAPED_UNICODE); ?>;
 const grade = <?php echo json_encode($grade_number); ?>;
 
 function normalize(str) {
-    return str.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 document.getElementById('subjectSelect').addEventListener('change', function() {
@@ -123,7 +148,7 @@ document.getElementById('subjectSelect').addEventListener('change', function() {
     }
 
     const subjectNorm = normalize(subjectRaw);
-    const gradeStr = grade.toString();
+    const gradeStr = String(grade);
 
     const gradePatterns = [
         subjectNorm + gradeStr,
